@@ -1,5 +1,6 @@
 import argparse
-
+import ast
+import re
 
 def file_parser(input_file):
     with open(input_file, 'r') as file:
@@ -93,4 +94,139 @@ def calculate_similarity_score(first_text, second_text):
     return calculate_score(levenstein_distances_sum, text_length)
 
 
-print(calculate_similarity_score(codes_pair[0], codes_pair[1]))
+# -------------------------------------------------------------------------
+# Получение всех имен переменных
+class Visitor(ast.NodeTransformer):
+    _constants = []
+
+    def visit_Name(self, node):
+        object = node.__getattribute__('id')
+        self._constants.append(object)
+        self.generic_visit(node)
+
+    def constants(self):
+        return self._constants
+
+
+node = ast.parse(codes_pair[1])
+visitor = Visitor()
+visitor.visit(node)
+variables = set(visitor.constants())
+
+
+# ------------------------------------------------------------------------------------------
+# Создание интервалов функций
+
+# Класс интервала
+class Interval:
+    def __init__(self, name, begin_line_number, end_line_number):
+        self.name = name
+        self.begin = begin_line_number
+        self.end = end_line_number
+
+
+# Класс дерева интервалов
+class Intervaltree:
+
+    def __init__(self, interval, left_child, right_child, parent):
+        self.interval = interval
+        self.left = left_child
+        self.right = right_child
+        self.parent = parent
+
+
+# Из текста программы возвращает список интервалов функций
+def parse_file_to_interval_list(program_code: str):
+    def node_interval(node: ast.stmt):
+        begin = node.lineno
+        end = node.lineno
+        for node in ast.walk(node):
+            if hasattr(node, "lineno"):
+                begin = min(begin, node.lineno)
+                end = max(end, node.lineno)
+        return begin, end + 1
+
+    parsed = ast.parse(program_code)
+    interval_list = []
+    for item in ast.walk(parsed):
+        if isinstance(item, (ast.ClassDef, ast.FunctionDef)):
+            interval_ = node_interval(item)
+            interval_list.append(Interval(item.name, interval_[0], interval_[1]))
+    return interval_list
+
+
+# Из списка интервалов функций создает деревья из одного элемента
+def get_trees_list(intervals_list):
+    trees_list = []
+    for interval in intervals_list:
+        new_tree = Intervaltree(interval, None, None, None)
+        trees_list.append(new_tree)
+    return trees_list
+
+
+# Из двух соседних деревьев создает одно
+# Если интервал второй функции вложен в интервал первой, то дерево этого интервала становится левым потомком
+# Если же этот интервал идет после первого - правым потомком
+def update_tree(tree, new_tree):
+    if new_tree.interval.begin < tree.interval.end:
+        if tree.left is None:
+            tree.left = new_tree
+            new_tree.parent = tree
+        else:
+            update_tree(tree.left, new_tree)
+    else:
+        if tree.right is None:
+            tree.right = new_tree
+            new_tree.parent = tree
+        else:
+            update_tree(tree.right, new_tree)
+    return tree
+
+
+# Из списка одноэлементыных деревьев строится одно общее
+def build_intervaltree(trees_list):
+    tree = trees_list[0]
+    trees_list.remove(trees_list[0])
+    while len(trees_list) > 0:
+        tree = update_tree(tree, trees_list[0])
+        trees_list.remove(trees_list[0])
+    return tree
+
+
+# def take_function_priotity(code, node):
+#     if node.left is not None:
+#         take_function_priotity(code, node.left)
+#         ######
+#     if node.right is not None:
+#         take_function_priotity(code, node.right)
+
+
+def give_function_part(code, interval):
+    begin = interval.begin - 1
+    end = interval.end - 1
+
+    lines_number = code.split('\n')
+
+    func = '\n'.join(lines_number[begin:end])
+    return func
+
+
+func_pair = []
+
+for c in codes_pair:
+    intervals = parse_file_to_interval_list(c)
+    intervals.sort(key=lambda x: x.begin)
+    trees_list = get_trees_list(intervals)
+    tree = build_intervaltree(trees_list)
+    intervals.sort(key=lambda x: x.name)
+    func_pair.append(give_function_part(c, intervals[10]))
+    for inter in intervals:
+        print(inter.name)
+    print('##################')
+
+
+score = calculate_similarity_score(func_pair[0], func_pair[1])
+print(score)
+
+
+
